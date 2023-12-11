@@ -87,7 +87,6 @@ public class ProductsController : ControllerBase
         return NoContent();
     }
 
-    // Example of adjusting stock - you'll need to add a new endpoint for this
     [HttpPost("adjuststock/{id}")]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> AdjustProductStock(int id, int adjustmentQuantity)

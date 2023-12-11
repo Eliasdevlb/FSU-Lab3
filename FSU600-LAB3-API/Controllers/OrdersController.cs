@@ -4,7 +4,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
 using System.Linq;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 
 [Route("api/[controller]")]
@@ -18,25 +20,93 @@ public class OrdersController : ControllerBase
         _context = context;
     }
 
-    // GET: api/Orders
+    [HttpPost]
+    public async Task<ActionResult<Order>> PostOrder([FromBody] OrderCreationDto orderDto)
+    {
+        using var transaction = await _context.Database.BeginTransactionAsync();
+
+        try
+        {
+            var user = await _context.Users.SingleOrDefaultAsync(u => u.Email == orderDto.Email);
+            if (user == null)
+            {
+                user = new User { Email = orderDto.Email, UserName = orderDto.Email };
+                _context.Users.Add(user);
+                await _context.SaveChangesAsync();
+            }
+
+            var order = new Order
+            {
+                UserId = user.Id,
+                TotalPrice = orderDto.TotalPrice,
+                Date = DateTime.UtcNow,
+                OrderItems = new List<OrderItem>()
+            };
+
+            _context.Orders.Add(order);
+
+            foreach (var itemDto in orderDto.Items)
+            {
+                var product = await _context.Products
+                    .Where(p => p.ProductId == itemDto.ProductId)
+                    .SingleOrDefaultAsync();
+
+                if (product == null)
+                {
+                    throw new Exception($"Product with ID {itemDto.ProductId} not found.");
+                }
+
+                if (product.StockQuantity < itemDto.Quantity)
+                {
+                    throw new Exception($"Not enough stock for product ID {itemDto.ProductId}.");
+                }
+
+                product.StockQuantity -= itemDto.Quantity;
+
+                var orderItem = new OrderItem
+                {
+                    ProductId = itemDto.ProductId,
+                    Quantity = itemDto.Quantity,
+                    Order = order
+                };
+
+                _context.OrderItems.Add(orderItem);
+            }
+
+            await _context.SaveChangesAsync();
+            await transaction.CommitAsync();
+
+            return CreatedAtAction(nameof(GetOrder), new { id = order.OrderId }, order);
+        }
+        catch (Exception ex)
+        {
+            await transaction.RollbackAsync();
+            return BadRequest(ex.Message);
+        }
+    }
+
+
+
+
+
+
     [HttpGet]
     public async Task<ActionResult<IEnumerable<Order>>> GetOrders()
     {
-        // Include User and OrderItems (and Product within each OrderItem) if you have such a relationship
         return await _context.Orders
                              .Include(o => o.User)
-                             // .Include(o => o.OrderItems).ThenInclude(oi => oi.Product)
+                             .Include(o => o.OrderItems)
+                                 .ThenInclude(oi => oi.Product)
                              .ToListAsync();
     }
 
-    // GET: api/Orders/5
     [HttpGet("{id}")]
     public async Task<ActionResult<Order>> GetOrder(int id)
     {
-        // Include User and OrderItems (and Product within each OrderItem) if you have such a relationship
         var order = await _context.Orders
                                   .Include(o => o.User)
-                                  // .Include(o => o.OrderItems).ThenInclude(oi => oi.Product)
+                                  .Include(o => o.OrderItems)
+                                      .ThenInclude(oi => oi.Product)
                                   .SingleOrDefaultAsync(o => o.OrderId == id);
 
         if (order == null)
@@ -47,9 +117,6 @@ public class OrdersController : ControllerBase
         return order;
     }
 
-
-
-    // DELETE: api/Orders/5
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteOrder(int id)
     {
@@ -65,10 +132,33 @@ public class OrdersController : ControllerBase
         return NoContent();
     }
 
-    // Additional methods can be added here to handle order updates or specific business logic related to orders
-
     private bool OrderExists(int id)
     {
         return _context.Orders.Any(e => e.OrderId == id);
     }
+
+    public class OrderCreationDto
+    {
+        [Required]
+        [EmailAddress]
+        public string Email { get; set; }
+
+        [Range(0, double.MaxValue)]
+        public decimal TotalPrice { get; set; }
+
+        [Required]
+        [MinLength(1)]
+        public List<OrderItemDto> Items { get; set; }
+    }
+
+    public class OrderItemDto
+    {
+        [Range(1, int.MaxValue)]
+        public int ProductId { get; set; }
+
+        [Range(1, int.MaxValue)]
+        public int Quantity { get; set; }
+    }
+
+
 }
